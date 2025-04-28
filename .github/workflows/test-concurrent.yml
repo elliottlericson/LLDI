@@ -1,4 +1,4 @@
-name: "Test & Run GT Image (EC2-style) with dual logging"
+name: "Test & Run GT Image (EC2-style) with concurrency"
 
 on:
   push:
@@ -8,11 +8,11 @@ on:
 
 jobs:
   run-gt-instances:
-    runs-on: ubuntu-latest      # includes Docker & awscli v1
+    runs-on: ubuntu-latest      # comes with Docker + awscli v1
 
     strategy:
       matrix:
-        instance: [1]           # single‐instance test
+        instance: [1]           # testing with a single instance
       max-parallel: 20
 
     steps:
@@ -21,14 +21,16 @@ jobs:
 
       - name: Get public IP
         run: |
-          echo "Runner public IP: $(curl -s https://api.ipify.org)"
+          PUBLIC_IP=$(curl -s https://api.ipify.org)
+          echo "Runner public IP: $PUBLIC_IP"
 
-      - name: Verify Docker & AWS CLI
-        run: |
-          docker version
-          aws --version
+      - name: Verify Docker is installed
+        run: docker version
 
-      - name: Create 10 GB swap
+      - name: Verify AWS CLI is installed
+        run: aws --version
+
+      - name: Create a SWAP
         run: |
           sudo fallocate -l 10G /swapfile
           sudo chmod 600 /swapfile
@@ -36,47 +38,19 @@ jobs:
           sudo swapon /swapfile
           echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab
 
-      - name: Install & start Redis
+      - name: Install and start Redis
         run: |
           sudo apt-get update
           sudo apt-get install -y redis-server
           sudo systemctl enable --now redis-server
           redis-cli ping
 
-      - name: Configure AWS credentials (for CLI steps)
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:           ${{ secrets.AWS_REGION }}
-
-      - name: Install & configure CloudWatch Logs agent
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y awscli
-          curl "https://s3.${{ secrets.AWS_REGION }}.amazonaws.com/amazoncloudwatch-agent-${{ secrets.AWS_REGION }}/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb" -o agent.deb
-          sudo dpkg -i agent.deb
-          cat <<EOF | sudo tee /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
-{
-  "logs": {
-    "logs_collected": {
-      "files": {
-        "collect_list": [
-          {
-            "file_path": "/var/lib/docker/containers/*/*-json.log",
-            "log_group_name": "${{ secrets.AWS_LOG_GROUP }}",
-            "log_stream_name": "{instance_id}-{container_id}",
-            "timestamp_format": "%Y-%m-%dT%H:%M:%S.%f"
-          }
-        ]
-      }
-    }
-  }
-}
-EOF
-          sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
-            -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
-            -s
+          aws-access-key-id:      ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key:  ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:             ${{ secrets.AWS_REGION }}
 
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v1
@@ -89,13 +63,16 @@ EOF
 
       - name: Override REDIS_HOST for GitHub runner
         run: |
+          # point at host gateway instead of AWS ElastiCache
           sed -i 's|^REDIS_HOST=.*|REDIS_HOST=host.docker.internal|' app.env
 
       - name: Pull Docker image
         run: |
           docker pull ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:${{ secrets.IMAGE_TAG }}
 
-      - name: Run container with default logging & host‐gateway mapping
+      # Consider using a CW Agent
+
+      - name: Run container with .env & host-gateway mapping
         run: |
           docker run -d \
             --name gt-${{ matrix.instance }} \
