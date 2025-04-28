@@ -1,4 +1,4 @@
-name: "Test & Run GT Image (EC2-style) with concurrency"
+name: "Test & Run GT Image (EC2-style) with host networking"
 
 on:
   push:
@@ -21,14 +21,12 @@ jobs:
 
       - name: Get public IP
         run: |
-          PUBLIC_IP=$(curl -s https://api.ipify.org)
-          echo "Runner public IP: $PUBLIC_IP"
+          echo "Runner public IP: $(curl -s https://api.ipify.org)"
 
-      - name: Verify Docker is installed
-        run: docker version
-
-      - name: Verify AWS CLI is installed
-        run: aws --version
+      - name: Verify Docker & AWS CLI
+        run: |
+          docker version
+          aws --version
 
       - name: Create a SWAP
         run: |
@@ -48,9 +46,9 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          aws-access-key-id:      ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key:  ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:             ${{ secrets.AWS_REGION }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:           ${{ secrets.AWS_REGION }}
 
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v1
@@ -61,22 +59,20 @@ jobs:
             --secret-id ${{ secrets.AWS_SECRETS_MANAGER_SECRET_ID }} \
             --query SecretString --output text > app.env
 
-      - name: Override REDIS_HOST for GitHub runner
+      - name: Override REDIS_HOST for host networking in GH Actions
         run: |
-          # point at host gateway instead of AWS ElastiCache
-          sed -i 's|^REDIS_HOST=.*|REDIS_HOST=host.docker.internal|' app.env
+          # inside host network, localhost is Redis
+          sed -i 's|^REDIS_HOST=.*|REDIS_HOST=127.0.0.1|' app.env
 
       - name: Pull Docker image
         run: |
           docker pull ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:${{ secrets.IMAGE_TAG }}
 
-      # Consider using a CW Agent
-
-      - name: Run container with .env & host-gateway mapping
+      - name: Run container attached with host network
         run: |
           docker run --rm \
             --name gt-${{ matrix.instance }} \
-            --add-host host.docker.internal:host-gateway \
+            --network host \
             --shm-size 10g \
             --env-file app.env \
             --env AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
