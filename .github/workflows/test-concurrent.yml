@@ -77,7 +77,6 @@ jobs:
           docker run --rm \
             --name gt-${{ matrix.instance }} \
             --add-host host.docker.internal:host-gateway \
-            --restart unless-stopped \
             --shm-size 10g \
             --env-file app.env \
             --env AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
