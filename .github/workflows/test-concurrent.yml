@@ -25,12 +25,10 @@ jobs:
           echo "Runner public IP: $PUBLIC_IP"
 
       - name: Verify Docker is installed
-        run: |
-          echo "Docker version:" && docker version
+        run: docker version
 
       - name: Verify AWS CLI is installed
-        run: |
-          echo "AWS CLI version:" && aws --version
+        run: aws --version
 
       - name: Create a SWAP
         run: |
@@ -45,15 +43,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y redis-server
           sudo systemctl enable --now redis-server
-          # verify Redis is up
           redis-cli ping
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
         with:
-          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region:           ${{ secrets.AWS_REGION }}
+          aws-access-key-id:      ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key:  ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:             ${{ secrets.AWS_REGION }}
 
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v1
@@ -64,16 +61,21 @@ jobs:
             --secret-id ${{ secrets.AWS_SECRETS_MANAGER_SECRET_ID }} \
             --query SecretString --output text > app.env
 
+      - name: Override REDIS_HOST for GitHub runner
+        run: |
+          # point at host gateway instead of AWS ElastiCache
+          sed -i 's|^REDIS_HOST=.*|REDIS_HOST=host.docker.internal|' app.env
+
       - name: Pull Docker image
         run: |
           docker pull ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:${{ secrets.IMAGE_TAG }}
 
-      - name: Run container with .env, awslogs & host‐network to reach Redis
+      - name: Run container with .env, awslogs & host-gateway mapping
         run: |
           LOG_STREAM="GH-Action-$(date +'%Y-%m-%d-%H-%M-%S')--$(uuidgen)"
           docker run -d \
             --name gt-${{ matrix.instance }} \
-            --network host \
+            --add-host host.docker.internal:host-gateway \
             --restart unless-stopped \
             --shm-size 10g \
             --log-driver awslogs \
@@ -85,8 +87,3 @@ jobs:
             --env AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
             --env AWS_REGION=${{ secrets.AWS_REGION }} \
             ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:${{ secrets.IMAGE_TAG }}
-
-      - name: Smoke‐test app’s Redis connectivity
-        run: |
-          # inside your container, try pinging Redis on localhost
-          docker exec gt-1 redis-cli -h 127.0.0.1 ping
