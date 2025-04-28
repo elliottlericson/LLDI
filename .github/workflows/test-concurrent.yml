@@ -1,0 +1,76 @@
+name: "Test & Run GT Image (EC2-style) with concurrency"
+
+on:
+  push:
+    branches:
+      - 'gt*'
+  workflow_dispatch:
+
+jobs:
+  run-gt-instances:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        instance: [1] #[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
+      max-parallel: 20 # Max for a free account, any more would simply be put on a queue
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create 2 GB swap
+        run: |
+          sudo fallocate -l 2G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab
+
+      - name: Install Docker, jq & AWS CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker.io jq awscli
+          sudo systemctl enable --now docker
+
+      - name: Wait for Docker
+        run: |
+          until docker info >/dev/null 2>&1; do
+            echo "Waiting for Docker…"
+            sleep 1
+          done
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id:      ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key:  ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:             ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Fetch `.env` from AWS Secrets Manager
+        run: |
+          aws secretsmanager get-secret-value \
+            --secret-id ${{ secrets.AWS_SECRETS_MANAGER_SECRET_ID }} \
+            --query SecretString --output text \
+            > app.env
+
+      - name: Pull Docker image
+        run: |
+          docker pull ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:${{ secrets.IMAGE_TAG }}
+
+      - name: Run container with .env & awslogs
+        run: |
+          LOG_STREAM="GH-Action-$(date +'%Y-%m-%d-%H-%M-%S')--$(uuidgen)"
+          docker run -d \
+            --name gt-${{ matrix.instance }} \
+            --restart unless-stopped \
+            --shm-size 2g \
+            --log-driver awslogs \
+            --log-opt awslogs-group=${{ secrets.AWS_LOG_GROUP }} \
+            --log-opt awslogs-region=${{ secrets.AWS_REGION }} \
+            --log-opt awslogs-stream="$LOG_STREAM" \
+            --env-file app.env \
+            ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:${{ secrets.IMAGE_TAG }}
