@@ -40,10 +40,13 @@ jobs:
           sudo swapon /swapfile
           echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab
 
-      - name: Install jq, unzip & curl
+      - name: Install and start Redis
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq unzip curl
+          sudo apt-get install -y redis-server
+          sudo systemctl enable --now redis-server
+          # verify Redis is up
+          redis-cli ping
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v2
@@ -65,11 +68,12 @@ jobs:
         run: |
           docker pull ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:${{ secrets.IMAGE_TAG }}
 
-      - name: Run container with .env & awslogs
+      - name: Run container with .env, awslogs & host‐network to reach Redis
         run: |
           LOG_STREAM="GH-Action-$(date +'%Y-%m-%d-%H-%M-%S')--$(uuidgen)"
           docker run -d \
             --name gt-${{ matrix.instance }} \
+            --network host \
             --restart unless-stopped \
             --shm-size 10g \
             --log-driver awslogs \
@@ -81,3 +85,8 @@ jobs:
             --env AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
             --env AWS_REGION=${{ secrets.AWS_REGION }} \
             ${{ secrets.ECR_REGISTRY }}/${{ secrets.ECR_REPOSITORY }}:${{ secrets.IMAGE_TAG }}
+
+      - name: Smoke‐test app’s Redis connectivity
+        run: |
+          # inside your container, try pinging Redis on localhost
+          docker exec gt-1 redis-cli -h 127.0.0.1 ping
