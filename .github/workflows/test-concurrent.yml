@@ -74,7 +74,7 @@ jobs:
 
       - name: Run container with .env & host-gateway mapping
         run: |
-          docker run -d \
+          docker run --rm \
             --name gt-${{ matrix.instance }} \
             --add-host host.docker.internal:host-gateway \
             --restart unless-stopped \
