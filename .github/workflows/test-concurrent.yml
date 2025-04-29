@@ -7,14 +7,27 @@ on:
   workflow_dispatch:
 
 jobs:
-  run-gt-instances:
+  generate-matrix:
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.make-matrix.outputs.matrix }}
+    steps:
+      - name: Build JSON matrix of 1–500
+        id: make-matrix
+        run: |
+          # Use jq (pre-installed on ubuntu-latest) to build [1,2,…,500]
+          INSTANCES=$(jq -n '[range(1; 501)]')
+          # Wrap in the {"instance": […]} object and emit to GITHUB_OUTPUT
+          echo "matrix={\"instance\": $INSTANCES}" >> $GITHUB_OUTPUT
 
+  run-gt-instances:
+    needs: generate-matrix
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       max-parallel: 20
-      matrix:
-        instance: ${{ range(1, 501) }}
+      # Parse that JSON string back into a matrix
+      matrix: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
 
     steps:
       - name: Checkout code
